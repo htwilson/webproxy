@@ -11,4 +11,4 @@ using namespace std;
 int nDigit(int n);
 void checkPort(string str);
 void checkPath(string str);
-void print_rfc_timestamp(string cli_ip, string f_line, string status_code, int size);
+void printRFCTimestamp(string cli_ip, string f_line, string status_code, int size);

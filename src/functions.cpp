@@ -47,7 +47,7 @@ void checkPath(string str) {
 
 // https://stackoverflow.com/questions/3673226/how-to-print-time-in-format-2009-08-10-181754-811
 // date_format client_ip request_first_line http_status_code object_size_in_byte
-void print_rfc_timestamp(string cli_ip, string f_line, string status_code, int size) {
+void printRFCTimestamp(string cli_ip, string f_line, string status_code, int size) {
     time_t timer;
     char buffer[26];
     char str_ms[20];

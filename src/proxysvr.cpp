@@ -18,21 +18,21 @@ int main (int argc, char *argv[]) {
     checkPath(argv[3]);
     
     //open socket here 
-    int lstnSocket, connSocket;
+    int lstn_socket, conn_socket;
     struct sockaddr_in cli_addr, svr_addr;
 
-    lstnSocket = socket(AF_INET, SOCK_STREAM, 0);
+    lstn_socket = socket(AF_INET, SOCK_STREAM, 0);
     bzero(&svr_addr, sizeof(svr_addr));
-    svraddr.sin_family = AF_INET;
-    svraddr.sin_addr.s_addr = INADDR_ANY;
-    svraddr.sin_port = htons(atoi(argv[1]));
+    svr_addr.sin_family = AF_INET;
+    svr_addr.sin_addr.s_addr = INADDR_ANY;
+    svr_addr.sin_port = htons(atoi(argv[1]));
 
-    if ( (bind(lstnSocket, (struct sockaddr*) &svraddr, sizeof(svraddr))) < 0) {
+    if ( (bind(lstn_socket, (struct sockaddr*) &svr_addr, sizeof(svr_addr))) < 0) {
 		fprintf(stderr, "Bind error"); 
         exit(EXIT_FAILURE);
     }
 
-    listen(lstnSocket, 50);
+    listen(lstn_socket, 50);
 
     //split the process here using threads, look at tcp echo server
 

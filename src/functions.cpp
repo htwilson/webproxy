@@ -1,4 +1,4 @@
-#include "topheader.h"
+#include "functions.h"
 
 //helper function to determine the number of digits in a given integer, for use in checkPort()
 // store the datagrams somewhere and reorder them 

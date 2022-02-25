@@ -1,0 +1,4 @@
+Proxy server acts a gateway between the client and the server 
+send the request to the proxy server and forward that request
+VPNs function as proxy services
+Proxy takes requests and forwards it on, request looks like it comes from the server

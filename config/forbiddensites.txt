@@ -1,0 +1,6 @@
+www.bookface.com
+www.cornhub.com
+www.youtube.com
+www.fakenews.com
+10.6.6.6
+127.0.0.3

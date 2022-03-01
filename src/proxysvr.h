@@ -17,3 +17,4 @@ using namespace std;
 
 void threadFunc(int conn_sock, vector<string> fb_domain);
 vector<string> getForbiddenDomains(string filepath);
+string makeHTTPResponse(string status_code);

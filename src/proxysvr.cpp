@@ -59,7 +59,7 @@ vector<string> getForbiddenDomains(string filepath) {
 
     if(!fb_file.is_open()) {
         fprintf(stderr, "Error opening forbidden domains file at PATH: /%s\n", filepath.c_str()); 
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
 
     while(getline(fb_file, line)) {
@@ -67,6 +67,19 @@ vector<string> getForbiddenDomains(string filepath) {
     }
 
     return fb_domains;
+}
+
+string makeHTTPResponse(string status_code) {
+    string status_line;
+    if (status_code.compare("403") == 0) {
+        status_line = "HTTP/1.1 403 Forbidden\r\n";
+    } else if (status_code.compare("404") == 0) {
+        status_line = "HTTP/1.1 404 Not Found\r\n";
+    } else if (status_code.compare("501") == 0){
+        status_line = "HTTP/1.1 501 Not Implemented\r\n";
+    }
+    string http_res = status_line + "Connection: close\r\n\r\n"; 
+    return http_res;
 }
 
 void threadFunc(int conn_sock, vector<string> fb_domain) {
@@ -77,8 +90,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
     n = read(conn_sock, recvbuf, MAXSIZE);
 
     if (n < 0) {
-        perror("Error");
-        fprintf(stderr, "There was an issue calling read on a thread. Closing server.\n");
+        fprintf(stderr, "There was an issue calling read on a thread.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -93,15 +105,26 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
     }
 
     bool req_flag = false; 
-    // bool dom_restr_flag = false;
-    // bool port_flag = false;
     string domain;
+    string port = "443";
 
+    //check if there is a specifed port, if not, use 443, if 80, use 443 
+    //check the type of HTTP request as well
     for (int i = 0; i < (int) parsed_req.size(); i++) {
         int index = 0;
         if ( (index = parsed_req[i].find("GET")) > -1 ) {
+            if ( (index = parsed_req[i].rfind(":")) > -1 ) {
+                port = parsed_req[i].substr(index + 1);
+                index = port.find(" ");
+                port = port.substr(0, index - 1);
+            }
             req_flag = true;
         } else if ( (index = parsed_req[i].find("HEAD")) > -1 ) {
+            if ( (index = parsed_req[i].rfind(":")) > -1 ) {
+                port = parsed_req[i].substr(index + 1);
+                index = port.find(" ");
+                port = port.substr(0, index - 1);
+            }
             req_flag = true;
         } else if ( (index = parsed_req[i].find("Host: ")) > -1 ) {
             domain = parsed_req[i].substr(6, parsed_req[i].size() - 7); //strip the newline char or else gethostbyname() will not work 
@@ -109,7 +132,14 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
     }
     //check the type of request, if not get or head, return 501
     if (!req_flag) {
-        cout << "Send back 501 error." << endl;
+        string msg = makeHTTPResponse("501");
+        cout << msg << endl;
+        if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
+            fprintf(stderr, "There was an error when sending. \n");
+            exit(EXIT_FAILURE);
+        }
+        close(conn_sock);
+        return; 
     }
 
     //check that the requested domain is not in restricted files list, if is is, return 403 
@@ -117,40 +147,51 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
 
     for (int i = 0; i < (int) fb_domain.size(); i++) {
         if (fb_domain[i].compare(domain) == 0) {
-            cout << "return 403 forbidden domain name" << endl;
+            string msg = makeHTTPResponse("403");
+            cout << msg << endl;
+            if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
+                fprintf(stderr, "There was an error when sending. \n");
+                exit(EXIT_FAILURE);
+            }
+            close(conn_sock);
+            return; 
         }
     }
 
     struct hostent *he = gethostbyname(domain.c_str());
-    struct in_addr a;
+    struct in_addr addr;
 
     if (he) {
-        // printf("name: %s\n", he->h_name);
-        // while (*he->h_aliases)
-        //     printf("alias: %s\n", *he->h_aliases++);
-        while (*he->h_addr_list)
-        {
-            bcopy(*he->h_addr_list++, (char *) &a, sizeof(a));
-            // printf("address: %s\n", inet_ntoa(a));
+        while (*he->h_addr_list) {
+            bcopy(*he->h_addr_list++, (char *) &addr, sizeof(addr));
         }
     } else {
-        herror("error");
-        cout << "return 404 domain not found" << endl;
+        // DNS was not able to find an address
+        // herror("error");
+        string msg = makeHTTPResponse("404");
+        cout << msg << endl;
+        if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
+            fprintf(stderr, "There was an error when sending. \n");
+            exit(EXIT_FAILURE);
+        }
+        close(conn_sock);
+        return; 
     }
 
+    // if the IP address found matches an ip address on the list, it is restricted, send 403
     for (int i = 0; i < (int) fb_domain.size(); i++) {
-        if (fb_domain[i].compare(inet_ntoa(a)) == 0) {
-            cout << "return 403, forbidden IP address" << endl;
+        if (fb_domain[i].compare(inet_ntoa(addr)) == 0) {
+            string msg = makeHTTPResponse("403");
+            cout << msg << endl;
+            if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
+                fprintf(stderr, "There was an error when sending. \n");
+                exit(EXIT_FAILURE);
+            }
+            close(conn_sock);
+            return; 
         }
     }
-
-    //check if there is a specifed port, if not, use 443, if 80, use 443 
-
-    //check for errors in the HTTP request
-
     // print all requests to the access log file
-
-
 
     return; 
 }

@@ -45,9 +45,43 @@ void checkPath(string str) {
     }
 }
 
+vector<string> getForbiddenDomains(string filepath) {
+    vector<string> fb_domains;
+    string line;
+    ifstream fb_file;
+
+    fb_file.open(filepath);
+
+    if(!fb_file.is_open()) {
+        fprintf(stderr, "Error opening forbidden domains file at PATH: /%s\n", filepath.c_str()); 
+        exit(EXIT_FAILURE);
+    }
+    while(getline(fb_file, line)) {
+        fb_domains.push_back(line);
+    }
+
+    fb_file.close();
+    return fb_domains;
+}
+
+string makeHTTPResponse(string status_code) {
+    string status_line;
+
+    if (status_code.compare("403") == 0) {
+        status_line = "HTTP/1.1 403 Forbidden\r\n";
+    } else if (status_code.compare("400") == 0) {
+        status_line = "HTTP/1.1 400 Bad Request\r\n";
+    } else if (status_code.compare("501") == 0){
+        status_line = "HTTP/1.1 501 Not Implemented\r\n";
+    }
+    
+    string http_res = status_line + "Connection: close\r\n\r\n"; 
+    return http_res;
+}
+
 // https://stackoverflow.com/questions/3673226/how-to-print-time-in-format-2009-08-10-181754-811
 // date_format client_ip request_first_line http_status_code object_size_in_byte
-void printRFCTimestamp(string cli_ip, string f_line, string status_code, int size) {
+void printRFCTimestamp(string fp, string cli_ip, string f_line, string status_code, int size) {
     time_t timer;
     char buffer[26];
     char str_ms[20];
@@ -62,7 +96,21 @@ void printRFCTimestamp(string cli_ip, string f_line, string status_code, int siz
     //convert ms to string and truncate
     sprintf(str_ms, "%ld", tv.tv_usec);
 
-    fprintf(stdout, "%s.%.3sZ", buffer, str_ms);
+    //open the access log file
+    FILE *log_file = fopen(fp.c_str(), "a");
+    if(log_file == NULL){
+        fprintf(stderr, "There was an error when creating the file. \n");
+        exit(EXIT_FAILURE);
+    }
+
+    //strip the \r\n from the first line 
+    int index =  f_line.find("\r");
+    string f_line_stripped = f_line.substr(0, index);
+
+    //RFC 3339 format timestring 
+    fprintf(log_file, "%s.%.3sZ", buffer, str_ms);
     // date_format client_ip request_first_line http_status_code object_size_in_byte
-    fprintf(stdout, " %s, %s, %s, %d\n", cli_ip.c_str(), f_line.c_str(), status_code.c_str(), size);
+    fprintf(log_file, " %s \"%s\" %s %d\n", cli_ip.c_str(), f_line_stripped.c_str(), status_code.c_str(), size);
+
+    fclose(log_file);
 }

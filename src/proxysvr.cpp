@@ -40,49 +40,22 @@ int main (int argc, char *argv[]) {
     listen(lstn_sock, MAXREQ);
 
     vector<thread> threads; 
+    vector<string> fb_domains = getForbiddenDomains(argv[2]);
 
     while (true) {
         cli_len = sizeof(cli_addr);
         conn_sock = accept(lstn_sock, (struct sockaddr *) &cli_addr, &cli_len);
 
+        // get the client IP address
+        string cli_addr_str(inet_ntoa(cli_addr.sin_addr));
+        // cout << "Cli addr: " << cli_addr_str << endl;
+
         //create the thread here, pass in forbidden domains vector 
-        threads.push_back(thread(threadFunc, conn_sock, getForbiddenDomains(argv[2])));
+        threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
     }
 }
 
-vector<string> getForbiddenDomains(string filepath) {
-    vector<string> fb_domains;
-    string line;
-    ifstream fb_file;
-
-    fb_file.open(filepath);
-
-    if(!fb_file.is_open()) {
-        fprintf(stderr, "Error opening forbidden domains file at PATH: /%s\n", filepath.c_str()); 
-        exit(EXIT_FAILURE);
-    }
-
-    while(getline(fb_file, line)) {
-        fb_domains.push_back(line);
-    }
-
-    return fb_domains;
-}
-
-string makeHTTPResponse(string status_code) {
-    string status_line;
-    if (status_code.compare("403") == 0) {
-        status_line = "HTTP/1.1 403 Forbidden\r\n";
-    } else if (status_code.compare("404") == 0) {
-        status_line = "HTTP/1.1 404 Not Found\r\n";
-    } else if (status_code.compare("501") == 0){
-        status_line = "HTTP/1.1 501 Not Implemented\r\n";
-    }
-    string http_res = status_line + "Connection: close\r\n\r\n"; 
-    return http_res;
-}
-
-void threadFunc(int conn_sock, vector<string> fb_domain) {
+void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, string cli_addr_str) {
     // read the message from the client, create an ssl connection
     int n;
     char recvbuf[MAXSIZE];
@@ -91,7 +64,10 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
 
     if (n < 0) {
         fprintf(stderr, "There was an issue calling read on a thread.\n");
-        exit(EXIT_FAILURE);
+        //terminate the thread
+        // exit(EXIT_FAILURE);
+        close(conn_sock);
+        return; 
     }
 
     vector<string> parsed_req;
@@ -130,71 +106,63 @@ void threadFunc(int conn_sock, vector<string> fb_domain) {
             domain = parsed_req[i].substr(6, parsed_req[i].size() - 7); //strip the newline char or else gethostbyname() will not work 
         }
     }
+
     //check the type of request, if not get or head, return 501
     if (!req_flag) {
         string msg = makeHTTPResponse("501");
+        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "501", 0);
         cout << msg << endl;
         if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
             fprintf(stderr, "There was an error when sending. \n");
-            exit(EXIT_FAILURE);
         }
         close(conn_sock);
         return; 
     }
 
     //check that the requested domain is not in restricted files list, if is is, return 403 
-    // https://stackoverflow.com/questions/32737083/extracting-ip-data-using-gethostbyname
-
     for (int i = 0; i < (int) fb_domain.size(); i++) {
         if (fb_domain[i].compare(domain) == 0) {
             string msg = makeHTTPResponse("403");
+            printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "403", 0);
             cout << msg << endl;
             if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
                 fprintf(stderr, "There was an error when sending. \n");
-                exit(EXIT_FAILURE);
             }
             close(conn_sock);
             return; 
         }
     }
 
-    struct hostent *he = gethostbyname(domain.c_str());
+    // https://stackoverflow.com/questions/32737083/extracting-ip-data-using-gethostbyname
+    struct hostent *host_entry = gethostbyname(domain.c_str());
     struct in_addr addr;
 
-    if (he) {
-        while (*he->h_addr_list) {
-            bcopy(*he->h_addr_list++, (char *) &addr, sizeof(addr));
-        }
-    } else {
+    if (!host_entry) {
         // DNS was not able to find an address
         // herror("error");
-        string msg = makeHTTPResponse("404");
+        string msg = makeHTTPResponse("400");
+        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "400", 0);
         cout << msg << endl;
         if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
             fprintf(stderr, "There was an error when sending. \n");
-            exit(EXIT_FAILURE);
         }
         close(conn_sock);
         return; 
     }
 
-    // if the IP address found matches an ip address on the list, it is restricted, send 403
-    for (int i = 0; i < (int) fb_domain.size(); i++) {
-        if (fb_domain[i].compare(inet_ntoa(addr)) == 0) {
-            string msg = makeHTTPResponse("403");
-            cout << msg << endl;
-            if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
-                fprintf(stderr, "There was an error when sending. \n");
-                exit(EXIT_FAILURE);
-            }
-            close(conn_sock);
-            return; 
-        }
+    while (*host_entry->h_addr_list) {
+        bcopy(*host_entry->h_addr_list++, (char *) &addr, sizeof(addr));
     }
-    // print all requests to the access log file
 
+    // cout << "DNS: " << inet_ntoa(addr) << endl;
+    // cout << "thread IP addr: " << cli_addr_str << endl;
+    // print all requests to the access log file
+    printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "200", 0);
     return; 
 }
 
 // NOTES:
 // CONSIDER WHEN TO CLOSE THE CONNECTION SOCKET AND THE LISTENING SOCKET
+
+//SSL methods to use:
+// SSLv23_client_method()

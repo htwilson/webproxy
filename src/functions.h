@@ -17,4 +17,4 @@ void checkPort(string str);
 void checkPath(string str);
 vector<string> getForbiddenDomains(string filepath);
 string makeHTTPResponse(string status_code);
-void printRFCTimestamp(string fp, string cli_ip, string f_line, string status_code, int size);
+void printRFCTimestamp(string fp, string cli_ip, string f_line, int status_code, int size);

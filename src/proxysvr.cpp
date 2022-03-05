@@ -58,36 +58,35 @@ int main (int argc, char *argv[]) {
         // get the client IP address
         string cli_addr_str(inet_ntoa(cli_addr.sin_addr));
 
-        //create the thread here, pass in forbidden domains vector 
+        //create the thread here, pass in threadFunc args
         threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
+
+        // how do i join the threads?
     }
 }
 
 void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, string cli_addr_str) {
     // read the message from the client, create an ssl connection
-    int n;
     char recvbuf[MAXSIZE];
-    
-    n = read(conn_sock, recvbuf, MAXSIZE);
-
-    if (n < 0) {
+    if (read(conn_sock, recvbuf, MAXSIZE) < 0) {
         fprintf(stderr, "There was an issue calling read on a thread. Closing thread.\n");
         close(conn_sock);
         return; 
     }
 
-    vector<string> parsed_req;
-    //parse the request here. convert into a string  
+    //parse the request here. convert rcvbuf into a string 
+    vector<string> parsed_req; 
     string str_req(recvbuf);
 
     int pos = 0;
-    while ((pos = str_req.find("\n")) > -1) {
+    while ( (pos = str_req.find("\n")) > -1) {
         //cout << str_req.substr(0, pos) << endl;
         parsed_req.push_back(str_req.substr(0, pos));
         str_req.erase(0, pos + strlen("\n"));
     }
 
     bool req_flag = false; 
+    bool header_only = NULL; 
     string domain;
     string port;
     //check if there is a specifed port, if not, use 443, if 80, use 443 
@@ -101,6 +100,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
                 index = port.find(" ");
                 port = port.substr(0, index - 1);
             }
+            header_only = false;
             req_flag = true;
         } else if ( (index = parsed_req[i].find("HEAD")) > -1 ) {
             if ( (index = parsed_req[i].rfind(":")) > -1 ) {
@@ -108,6 +108,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
                 index = port.find(" ");
                 port = port.substr(0, index - 1);
             }
+            header_only = true;
             req_flag = true;
         } else if ( (index = parsed_req[i].find("Host: ")) > -1 ) {
             domain = parsed_req[i].substr(6, parsed_req[i].size() - 7); //strip the newline char or else gethostbyname() will not work 
@@ -122,7 +123,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     //check the type of request, if not get or head, return 501
     if (!req_flag) {
         string msg = makeHTTPResponse("501");
-        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "501", 0);
+        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 501, 0);
         cout << msg << endl;
         if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
             fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
@@ -135,7 +136,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     for (int i = 0; i < (int) fb_domain.size(); i++) {
         if (fb_domain[i].compare(domain) == 0) {
             string msg = makeHTTPResponse("403");
-            printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "403", 0);
+            printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
             cout << msg << endl;
             if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
                 fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
@@ -153,7 +154,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         // DNS was not able to find an address
         // herror("error");
         string msg = makeHTTPResponse("400");
-        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "400", 0);
+        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 400, 0);
         cout << msg << endl;
         if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
             fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
@@ -166,7 +167,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         bcopy(*host_entry->h_addr_list++, (char *) &addr, sizeof(addr));
     }
 
-    int ssl_sock/*, sock_two*/;
+    int ssl_sock;
     // create a new socket to send to the destination 
     if ( (ssl_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		fprintf(stderr, "There was an issue creating a socket on the thread. Closing thread.\n"); 
@@ -182,7 +183,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     dst_addr.sin_port = htons(atoi(port.c_str()));
 
     // validate ip address
-    if ( inet_pton(AF_INET, inet_ntoa(addr), &dst_addr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, inet_ntoa(addr), &dst_addr.sin_addr) <= 0) {
         fprintf(stderr, "Invalid IP address %s. \n", inet_ntoa(addr));
         close(ssl_sock);
         close(conn_sock);
@@ -190,7 +191,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     }
 
     //connect to the dst
-    if ( connect(ssl_sock, (struct sockaddr *) &dst_addr, sizeof(dst_addr)) < 0) {
+    if (connect(ssl_sock, (struct sockaddr *) &dst_addr, sizeof(dst_addr)) < 0) {
         fprintf(stderr, "Connection error. Incorrect port or IP address? \n");
         close(ssl_sock);
         close(conn_sock);
@@ -204,30 +205,28 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
 
     // https://stackoverflow.com/questions/7698488/turn-a-simple-socket-into-an-ssl-socket
     // https://stackoverflow.com/questions/41229601/openssl-in-c-socket-connection-https-client
-    //create SSL structure and CTX
-    SSL_CTX *ctx = SSL_CTX_new( SSLv23_client_method()); //change from server method because it is not acting as the server 
+
+    //create CTX
+    SSL_CTX *ctx = SSL_CTX_new( SSLv23_client_method()); 
+    if (!ctx) {
+        fprintf(stderr, "Error creating SSL. Terminating thread.\n");
+        close(ssl_sock);
+        close(conn_sock);
+        return;
+    }
+
+    //create SSL structure
     SSL *ssl = SSL_new (ctx);
     if (!ssl) {
         fprintf(stderr, "Error creating SSL. Terminating thread.\n");
-        //log_ssl();
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
         SSL_CTX_free(ctx);
         close(ssl_sock);
         close(conn_sock);
         return;
     }
-    // if ( (ssl_sock = SSL_get_fd(ssl)) < 0) {
-    //     fprintf(stderr, "Error linking socket to SSL. Terminating thread.\n");
-    //     SSL_shutdown(ssl);
-    //     SSL_free(ssl);
-    //     close(ssl_sock);
-    //     close(conn_sock);
-    //     return;
-    // }
 
     // connect the SSL object to the socket
-    if ( SSL_set_fd (ssl, /*sock_two*/ssl_sock) < 0) {
+    if (SSL_set_fd (ssl, ssl_sock) < 0) {
         fprintf(stderr, "Error connecting SSL to the socket. Terminating thread.\n");
         SSL_shutdown(ssl);
         SSL_free(ssl);
@@ -241,8 +240,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
     //connect using ssl
-    // there is an error here 
-    if ( (SSL_connect(ssl)) <= 0) {
+    if (SSL_connect(ssl) <= 0) {
         fprintf(stderr, "Error connecting using SSL. Terminating thread.\n");
         SSL_shutdown(ssl);
         SSL_free(ssl);
@@ -253,7 +251,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     }
 
     //write to destination 
-    if ( SSL_write(ssl, recvbuf, MAXSIZE) <= 0) {
+    if (SSL_write(ssl, recvbuf, MAXSIZE) <= 0) {
         fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
         SSL_shutdown(ssl);
         SSL_free(ssl);
@@ -262,37 +260,93 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         close(conn_sock);
         return;
     }
-    memset(recvbuf, 0, MAXSIZE);
-    // read from destination 
-    if ( SSL_read(ssl, recvbuf, MAXSIZE) <= 0) {
-        fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        SSL_CTX_free(ctx);
-        close(ssl_sock);
-        close(conn_sock);
-        return;
-    }
-    cout << "Recieved from SSL! " << recvbuf << endl;
 
+    // clear the buffer of the client request
+    memset(recvbuf, 0, MAXSIZE);
+
+    // NOTE: THE FIRST READ WILL RETRIEVE THE HEADER, THEN SUBSEQUENT READS WILL GET DATA 
+
+    // read header from destination 
+    int r; 
+    if ( (r = SSL_read(ssl, recvbuf, MAXSIZE)) <= 0) {
+        fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        close(ssl_sock);
+        close(conn_sock);
+        return;
+    }
+
+    cout << recvbuf << endl;
+    int http_status;
     string content_size;
     string recvstr(recvbuf);
-    // int index = recvstr.find("Content-Length: ");
-    // int end = recvstr.fi
-    // content_size = recvstr.substr(index, )
-
     pos = 0;
+
+    // Obtain the content length and status code from the header
     while ( (pos = recvstr.find("\n")) > -1) {
-        int index;
-        // cout << recvstr.substr(0, pos) << endl;
-        if ( ((int) recvstr.substr(0, pos).find("Content-Length: ")) > -1 ) {
-            index = recvstr.substr(0, pos).find(" ");
-            int end = recvstr.substr(0, pos).find("\n");
-            content_size = recvstr.substr(index + 1, end);
+        string header_line = recvstr.substr(0, pos);
+        if ( ((int) header_line.find("Content-Length: ")) > -1 ) {
+            int index = header_line.find(" ");
+            content_size = header_line.substr(index + 1, header_line.size() - index + 1);
+        } else if ( ((int) header_line.find("HTTP")) > -1 ) {
+            int index = header_line.find(" ");
+            http_status = atoi((header_line.substr(index + 1, header_line.size() - index + 1)).c_str());
         }
         recvstr.erase(0, pos + strlen("\n"));
     }
-    printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], "200", atoi(content_size.c_str()));
+
+    cout << "Bytes read: " << r << endl;
+    //print to the access log here 
+    printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
+
+    // forward the header to the client
+    if (send(conn_sock, recvbuf, r, 0) < 0) {
+        fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        close(ssl_sock);
+        close(conn_sock);
+        return;
+    }
+    
+    // if header_only is disabled, call read, and start sending data to the client 
+    if (!header_only) {
+        int bytes_read = 0; 
+        while (bytes_read < atoi(content_size.c_str())) {
+            if ( (r = SSL_read(ssl, recvbuf, MAXSIZE)) < 0) {
+                fprintf(stderr, "Read error. Closing thread.\n");
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                close(ssl_sock);
+                close(conn_sock);
+                return;
+            }
+            bytes_read += r;
+            cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
+            cout << recvbuf << endl;
+
+            if (send(conn_sock, recvbuf, r, 0) < 0) {
+                fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                close(ssl_sock);
+                close(conn_sock);
+                return;
+            }
+        }
+    }
+
+    // ssl cleanip here before return, close sockets
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    close(ssl_sock);
+    close(conn_sock);
     return; 
 }
 
@@ -301,3 +355,20 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
 
 //SSL methods to use:
 // SSLv23_client_method()
+/*
+// make sure to strip the http response from the server, replace sending "200" line 280
+integer total_bytes, bytes_read
+while bytes_read < total_bytes {
+    int r = read()
+    error check
+
+    if header only if high, 
+        read from until you find the end of the header
+        break;
+    else
+        ignore until you find the end of the header
+        start reading after this  
+    
+    bytes_read += r;
+}
+*/

@@ -5,6 +5,9 @@
 // wget 127.0.0.1:2039 --header="Host: pudim.com.br"
 // curl -x http://127.0.0.1:2039/ http://www.example.com
 
+string fb_filepath;
+string al_filepath;
+
 //./myproxy listen_port forbidden_sites_file_path access_log_file_path
 int main (int argc, char *argv[]) {
 
@@ -20,6 +23,9 @@ int main (int argc, char *argv[]) {
     // check that both file paths are correct 
     checkPath(argv[2]);
     checkPath(argv[3]);
+
+    fb_filepath = argv[2];
+    al_filepath = argv[3];
     
     // open socket here for listening and connection 
     int lstn_sock, conn_sock;
@@ -46,8 +52,14 @@ int main (int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    vector<thread> threads; 
-    vector<string> fb_domains = getForbiddenDomains(argv[2]);
+    // call the signal handler to reload the forbidden list file
+    // https://www.tutorialspoint.com/how-do-i-catch-a-ctrlplusc-event-in-cplusplus
+
+    // ctrl-z to stop server, kill -9 $(jobs -p) to kill process
+    signal(SIGINT, signalHandler);
+
+    //vector<thread> threads; 
+    vector<string> fb_domains = getForbiddenDomains(fb_filepath);
 
     while (true) {
         cli_len = sizeof(cli_addr);
@@ -59,9 +71,8 @@ int main (int argc, char *argv[]) {
         string cli_addr_str(inet_ntoa(cli_addr.sin_addr));
 
         //create the thread here, pass in threadFunc args
-        threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
-
-        // how do i join the threads?
+        //threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
+        thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str).detach();
     }
 }
 
@@ -327,7 +338,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
             }
             bytes_read += r;
             cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
-            cout << recvbuf << endl;
+            // cout << recvbuf << endl;
 
             if (send(conn_sock, recvbuf, r, 0) < 0) {
                 fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
@@ -342,33 +353,23 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     }
 
     // ssl cleanip here before return, close sockets
+    // these functions are causing the SIGPIPE signal to send
+    cout << "starting shutdown..." << endl;
     SSL_shutdown(ssl);
     SSL_free(ssl);
     SSL_CTX_free(ctx);
     close(ssl_sock);
     close(conn_sock);
+    cout << "shutdown complete" << endl;
     return; 
 }
 
 // NOTES:
 // CONSIDER WHEN TO CLOSE THE CONNECTION SOCKET AND THE LISTENING SOCKET
 
-//SSL methods to use:
-// SSLv23_client_method()
-/*
-// make sure to strip the http response from the server, replace sending "200" line 280
-integer total_bytes, bytes_read
-while bytes_read < total_bytes {
-    int r = read()
-    error check
-
-    if header only if high, 
-        read from until you find the end of the header
-        break;
-    else
-        ignore until you find the end of the header
-        start reading after this  
-    
-    bytes_read += r;
-}
-*/
+//TO-DO:
+// Signal to reload the file 
+// Chunked encoding
+// closing threads - COMPLETE
+// multiple clients
+// specified port numbers

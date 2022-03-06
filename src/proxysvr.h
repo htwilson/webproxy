@@ -9,10 +9,12 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <signal.h>
 
-#define MAXSIZE 32678
+#define MAXSIZE 32768
 #define MAXREQ 50
 
 using namespace std;
 
+void signalHandler(int signum);
 void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, string cli_addr_str);

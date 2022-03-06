@@ -76,6 +76,11 @@ int main (int argc, char *argv[]) {
     }
 }
 
+void signalHandler(int signum) {
+    cout << "Caught signal!" << endl;
+    return;
+}
+
 void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, string cli_addr_str) {
     // read the message from the client, create an ssl connection
     char recvbuf[MAXSIZE];

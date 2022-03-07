@@ -1,13 +1,14 @@
 #include "functions.h"
 #include "proxysvr.h"
 
-//COMMANDS
+mutex glock;
+vector<string> fb_domains; 
+string fb_filepath;
+
+//COMMANDS & NOTES
 // wget 127.0.0.1:2039 --header="Host: pudim.com.br"
 // curl -x http://127.0.0.1:2039/ http://www.example.com
-
-string fb_filepath;
-string al_filepath;
-
+// ctrl-z to stop server, kill -9 $(jobs -p) to kill process
 //./myproxy listen_port forbidden_sites_file_path access_log_file_path
 int main (int argc, char *argv[]) {
 
@@ -24,8 +25,8 @@ int main (int argc, char *argv[]) {
     checkPath(argv[2]);
     checkPath(argv[3]);
 
+    //set the forbidden domains to a global variable
     fb_filepath = argv[2];
-    al_filepath = argv[3];
     
     // open socket here for listening and connection 
     int lstn_sock, conn_sock;
@@ -54,12 +55,15 @@ int main (int argc, char *argv[]) {
 
     // call the signal handler to reload the forbidden list file
     // https://www.tutorialspoint.com/how-do-i-catch-a-ctrlplusc-event-in-cplusplus
-
-    // ctrl-z to stop server, kill -9 $(jobs -p) to kill process
     signal(SIGINT, signalHandler);
 
+    // ignore SIGPIPE SIGNAL ON TCP SERVERS
+    // https://openssl-users.openssl.narkive.com/Qshv9fpx/ssl-shutdown-and-sigpipe
+    // https://stackoverflow.com/questions/18935446/program-received-signal-sigpipe-broken-pipe
+    signal(SIGPIPE,SIG_IGN);
+
     //vector<thread> threads; 
-    vector<string> fb_domains = getForbiddenDomains(fb_filepath);
+    fb_domains = getForbiddenDomains(fb_filepath);
 
     while (true) {
         cli_len = sizeof(cli_addr);
@@ -72,16 +76,18 @@ int main (int argc, char *argv[]) {
 
         //create the thread here, pass in threadFunc args
         //threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
-        thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str).detach();
+        thread(threadFunc, conn_sock, argv[3], cli_addr_str).detach();
     }
 }
 
 void signalHandler(int signum) {
-    cout << "Caught signal!" << endl;
+    glock.lock();
+    fb_domains = getForbiddenDomains(fb_filepath);
+    glock.unlock();
     return;
 }
 
-void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, string cli_addr_str) {
+void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     // read the message from the client, create an ssl connection
     char recvbuf[MAXSIZE];
     if (read(conn_sock, recvbuf, MAXSIZE) < 0) {
@@ -149,8 +155,8 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     }
 
     //check that the requested domain is not in restricted files list, if is is, return 403 
-    for (int i = 0; i < (int) fb_domain.size(); i++) {
-        if (fb_domain[i].compare(domain) == 0) {
+    for (int i = 0; i < (int) fb_domains.size(); i++) {
+        if (fb_domains[i].compare(domain) == 0) {
             string msg = makeHTTPResponse("403");
             printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
             cout << msg << endl;
@@ -190,6 +196,13 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         close(conn_sock);
         return;
     } 
+
+    // https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
+    if ( fcntl(conn_sock, F_SETFL, fcntl(conn_sock, F_GETFL, 0) | O_NONBLOCK) < 0){
+        fprintf(stderr, "There was an issue making a socket non blocking. Closing thread.\n"); 
+        close(conn_sock);
+        return;
+    }
 
     // create the dst address struct    
     struct sockaddr_in dst_addr;
@@ -266,7 +279,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         return;
     }
 
-    //write to destination 
+    //write to destination
     if (SSL_write(ssl, recvbuf, MAXSIZE) <= 0) {
         fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
         SSL_shutdown(ssl);
@@ -294,7 +307,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
         return;
     }
 
-    cout << recvbuf << endl;
+    //cout << recvbuf << endl;
     int http_status;
     string content_size;
     string recvstr(recvbuf);
@@ -314,6 +327,7 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     }
 
     cout << "Bytes read: " << r << endl;
+    cout << content_size << endl;
     //print to the access log here 
     printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
 
@@ -330,36 +344,67 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     
     // if header_only is disabled, call read, and start sending data to the client 
     if (!header_only) {
-        int bytes_read = 0; 
-        while (bytes_read < atoi(content_size.c_str())) {
-            if ( (r = SSL_read(ssl, recvbuf, MAXSIZE)) < 0) {
-                fprintf(stderr, "Read error. Closing thread.\n");
-                SSL_shutdown(ssl);
-                SSL_free(ssl);
-                SSL_CTX_free(ctx);
-                close(ssl_sock);
-                close(conn_sock);
-                return;
-            }
-            bytes_read += r;
-            cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
-            // cout << recvbuf << endl;
+        //reset the recv buffer
+        memset(recvbuf, 0, MAXSIZE);
+        int bytes_read = 0;
+        bool reset_flag = false; 
+        while (true) {
 
-            if (send(conn_sock, recvbuf, r, 0) < 0) {
-                fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
-                SSL_shutdown(ssl);
-                SSL_free(ssl);
-                SSL_CTX_free(ctx);
-                close(ssl_sock);
-                close(conn_sock);
-                return;
+            if (bytes_read >= atoi(content_size.c_str()) && atoi(content_size.c_str()) != 0) {
+                break;
+            }
+
+            // if the file is reloaded and the domain is now restricted, break from the loop
+            // close sockets, client will reconnect, 403 will be sent back
+            for (int i = 0; i < (int) fb_domains.size(); i++) {
+                // cout << fb_domains[i] << endl;
+                if (fb_domains[i].compare(domain) == 0) {
+                    reset_flag = true;
+                }
+            }   
+
+            if (reset_flag) {
+                break;
+            }
+
+            r = SSL_read(ssl, recvbuf, MAXSIZE);
+            int err = SSL_get_error(ssl, r); 
+            // cout << err << endl; 
+            // if (err == SSL_ERROR_ZERO_RETURN) {
+            //     cout << "ZERO RETURN" << endl;
+            // } else if (err == SSL_ERROR_WANT_READ) {
+            //     cout << "WANT READ" << endl;
+            // } else if (err == SSL_ERROR_WANT_WRITE) {
+            //     cout << "WANT WRITE" << endl;
+            // } else if (err == SSL_ERROR_SSL) {
+            //     cout << "ERROR SSL" << endl;
+            // } else if (err == SSL_ERROR_SYSCALL) {
+            //     cout << "SYSCALL" << endl;
+            // }
+
+            bytes_read += r;
+            //cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
+            // cout << recvbuf << endl;
+            if (err == 0) {
+                if (send(conn_sock, recvbuf, r, 0) < 0) {
+                    // if the socket we are writing to has been closed by the client
+                    if (errno == ECONNRESET) {
+                        puts("client termination");
+                        break;
+                    }
+                    fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
+                    SSL_shutdown(ssl);
+                    SSL_free(ssl);
+                    SSL_CTX_free(ctx);
+                    close(ssl_sock);
+                    close(conn_sock);
+                    return;
+                }
             }
         }
     }
 
     // ssl cleanip here before return, close sockets
-    // these functions are causing the SIGPIPE signal to send
-    cout << "starting shutdown..." << endl;
     SSL_shutdown(ssl);
     SSL_free(ssl);
     SSL_CTX_free(ctx);
@@ -369,11 +414,8 @@ void threadFunc(int conn_sock, vector<string> fb_domain, string access_log_fp, s
     return; 
 }
 
-// NOTES:
-// CONSIDER WHEN TO CLOSE THE CONNECTION SOCKET AND THE LISTENING SOCKET
-
 //TO-DO:
-// Signal to reload the file 
+// Signal to reload the file - COMPLETE
 // Chunked encoding
 // closing threads - COMPLETE
 // multiple clients

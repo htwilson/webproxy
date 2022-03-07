@@ -1,0 +1,40 @@
+wget 93.184.216.34:80/index.html --header="Host: www.example.com"
+
+wget 93.184.216.34/index.html --header="Host: www.example.com" --server-response --spider
+
+wget 13.35.121.73/index.html --header="Host: neverssl.com"
+
+wget 13.35.121.73/index.html --header="Host: neverssl.com" --server-response --spider
+
+
+// this fail
+wget 216.92.49.183/index.html --header="Host: softwareqatest.com"
+
+wget 216.92.49.183/index.html --header="Host: softwareqatest.com" --server-response --spider
+
+
+
+
+wget 142.250.189.164/index.html --header="Host: www.google.com"
+
+wget 142.250.189.164/index.html --header="Host: www.google.com" --server-response --spider
+
+wget 54.207.20.104 --header="Host: pudim.com.br"
+
+wget 54.207.20.104 --header="Host: pudim.com.br" --server-response --spider
+
+wget 161.69.29.75 --header="Host: www.testingmcafeesites.com"
+
+wget 161.69.29.75 --header="Host: www.testingmcafeesites.com" --server-response --spider
+
+wget 128.114.52.55:8080 --header="Host: ssrc-nas-1.soe.ucsc.edu"
+
+wget 128.114.52.55:8080 --header="Host: ssrc-nas-1.soe.ucsc.edu" --server-response --spider
+
+./bin/myweb www.example.com 93.184.216.32:80/index.html //default
+./bin/myweb neverssl.com 13.35.121.73/index.html //bad request 
+./bin/myweb softwareqatest.com 216.92.49.183/index.html //incorrect ip address
+./bin/myweb www.google.com 142.250.189.164/index.html //chunked site
+./bin/myweb pudim.com.br 54.207.20.104/index.html //header function 
+./bin/myweb www.testingmcafeesites.com 161.69.29.75 /no pathname or port
+./bin/myweb ssrc-nas-1.soe.ucsc.edu 128.114.52.55:8080 -h  //different port

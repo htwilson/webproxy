@@ -6,7 +6,7 @@ vector<string> fb_domains;
 string fb_filepath;
 
 //COMMANDS & NOTES
-// wget 127.0.0.1:2039 --header="Host: pudim.com.br"
+// wget www.example.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039
 // curl -x http://127.0.0.1:2039/ http://www.example.com
 // ctrl-z to stop server, kill -9 $(jobs -p) to kill process
 //./myproxy listen_port forbidden_sites_file_path access_log_file_path
@@ -60,9 +60,8 @@ int main (int argc, char *argv[]) {
     // ignore SIGPIPE SIGNAL ON TCP SERVERS
     // https://openssl-users.openssl.narkive.com/Qshv9fpx/ssl-shutdown-and-sigpipe
     // https://stackoverflow.com/questions/18935446/program-received-signal-sigpipe-broken-pipe
-    signal(SIGPIPE,SIG_IGN);
-
-    //vector<thread> threads; 
+    signal(SIGPIPE, SIG_IGN);
+ 
     fb_domains = getForbiddenDomains(fb_filepath);
 
     while (true) {
@@ -75,11 +74,11 @@ int main (int argc, char *argv[]) {
         string cli_addr_str(inet_ntoa(cli_addr.sin_addr));
 
         //create the thread here, pass in threadFunc args
-        //threads.push_back(thread(threadFunc, conn_sock, fb_domains, argv[3], cli_addr_str));
         thread(threadFunc, conn_sock, argv[3], cli_addr_str).detach();
     }
 }
 
+// handle SIGINT by locking threads and updating fb_domains
 void signalHandler(int signum) {
     glock.lock();
     fb_domains = getForbiddenDomains(fb_filepath);
@@ -174,7 +173,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     if (!host_entry) {
         // DNS was not able to find an address
-        // herror("error");
         string msg = makeHTTPResponse("400");
         printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 400, 0);
         cout << msg << endl;
@@ -208,7 +206,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     struct sockaddr_in dst_addr;
     bzero(&dst_addr, sizeof(dst_addr));
     dst_addr.sin_family = AF_INET;
-    // cout << "PORT: " << port << endl;
     dst_addr.sin_port = htons(atoi(port.c_str()));
 
     // validate ip address
@@ -294,7 +291,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     memset(recvbuf, 0, MAXSIZE);
 
     // NOTE: THE FIRST READ WILL RETRIEVE THE HEADER, THEN SUBSEQUENT READS WILL GET DATA 
-
     // read header from destination 
     int r; 
     if ( (r = SSL_read(ssl, recvbuf, MAXSIZE)) <= 0) {
@@ -307,7 +303,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         return;
     }
 
-    //cout << recvbuf << endl;
+    cout << recvbuf << endl;
     int http_status;
     string content_size;
     string recvstr(recvbuf);
@@ -326,8 +322,8 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         recvstr.erase(0, pos + strlen("\n"));
     }
 
-    cout << "Bytes read: " << r << endl;
-    cout << content_size << endl;
+    // cout << "Bytes read: " << r << endl;
+    // cout << content_size << endl;
     //print to the access log here 
     printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
 
@@ -350,6 +346,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         bool reset_flag = false; 
         while (true) {
 
+            // if the content length exists, you can read until you get the amount 
             if (bytes_read >= atoi(content_size.c_str()) && atoi(content_size.c_str()) != 0) {
                 break;
             }
@@ -357,7 +354,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             // if the file is reloaded and the domain is now restricted, break from the loop
             // close sockets, client will reconnect, 403 will be sent back
             for (int i = 0; i < (int) fb_domains.size(); i++) {
-                // cout << fb_domains[i] << endl;
                 if (fb_domains[i].compare(domain) == 0) {
                     reset_flag = true;
                 }
@@ -368,10 +364,21 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             }
 
             r = SSL_read(ssl, recvbuf, MAXSIZE);
+
+            bytes_read += r;
+            //cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
+            //cout << recvbuf << endl;
+
             int err = SSL_get_error(ssl, r); 
-            // cout << err << endl; 
+            //cout << r << endl;
+            //cout << err << endl; 
+            if (err != 0) {
+                //socket error, break the connection and restart 
+                break;
+            }
             // if (err == SSL_ERROR_ZERO_RETURN) {
             //     cout << "ZERO RETURN" << endl;
+            //     break;
             // } else if (err == SSL_ERROR_WANT_READ) {
             //     cout << "WANT READ" << endl;
             // } else if (err == SSL_ERROR_WANT_WRITE) {
@@ -379,12 +386,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             // } else if (err == SSL_ERROR_SSL) {
             //     cout << "ERROR SSL" << endl;
             // } else if (err == SSL_ERROR_SYSCALL) {
-            //     cout << "SYSCALL" << endl;
+            //     break;
             // }
 
-            bytes_read += r;
-            //cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
-            // cout << recvbuf << endl;
             if (err == 0) {
                 if (send(conn_sock, recvbuf, r, 0) < 0) {
                     // if the socket we are writing to has been closed by the client
@@ -410,13 +414,12 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     SSL_CTX_free(ctx);
     close(ssl_sock);
     close(conn_sock);
-    cout << "shutdown complete" << endl;
     return; 
 }
 
 //TO-DO:
 // Signal to reload the file - COMPLETE
-// Chunked encoding
+// Chunked encoding - COMPlETE
 // closing threads - COMPLETE
-// multiple clients
+// multiple clients - COMPLETE
 // specified port numbers

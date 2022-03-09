@@ -1,9 +1,10 @@
 #include "functions.h"
 #include "proxysvr.h"
 
-mutex glock;
+mutex fb_lock; //lock fb_domains
+mutex log_lock; //lock access_log
 vector<string> fb_domains; 
-string fb_filepath; //locked correctly
+string fb_filepath; 
 
 //COMMANDS & NOTES
 // wget www.example.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039
@@ -80,16 +81,16 @@ int main (int argc, char *argv[]) {
 
 // handle SIGINT by locking threads and updating fb_domains
 void signalHandler(int signum) {
-    glock.lock();
+    fb_lock.lock();
     fb_domains = getForbiddenDomains(fb_filepath);
-    glock.unlock();
+    fb_lock.unlock();
 }
 
 // lock threads to write to access log 
 void writeToLog(string fp, string cli_ip, string f_line, int status_code, int size){
-    glock.lock();
+    log_lock.lock();
     printRFCTimestamp(fp, cli_ip, f_line, status_code, size);
-    glock.unlock();
+    log_lock.unlock();
 }
 
 void sendHTTPResponse(int sockfd, string status_code) {
@@ -171,7 +172,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     }
 
     //check that the requested domain is not in restricted files list, if is is, return 403 
-    glock.lock();
+    fb_lock.lock();
     for (int i = 0; i < (int) fb_domains.size(); i++) {
         if (fb_domains[i].compare(domain) == 0) {
             sendHTTPResponse(conn_sock, "403");
@@ -180,7 +181,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             return; 
         }
     }
-    glock.unlock();
+    fb_lock.unlock();
 
     // https://stackoverflow.com/questions/32737083/extracting-ip-data-using-gethostbyname
     struct hostent *host_entry = gethostbyname(domain.c_str());
@@ -390,13 +391,13 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
             // if the file is reloaded and the domain is now restricted, break from the loop
             // close sockets, client will reconnect, 403 will be sent back
-            glock.lock();
+            fb_lock.lock();
             for (int i = 0; i < (int) fb_domains.size(); i++) {
                 if (fb_domains[i].compare(domain) == 0) {
                     reset_flag = true;
                 }
             }
-            glock.unlock();   
+            fb_lock.unlock();   
 
             if (reset_flag) {
                 break;
@@ -462,3 +463,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 // closing threads - COMPLETE
 // multiple clients - COMPLETE
 // specified port numbers - COMPLETE
+
+// QUESTION:
+// Chunked encoding does not work, gets SYSCALL error and kills thread, wgets only works because it retries, curl does not

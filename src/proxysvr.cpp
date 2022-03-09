@@ -363,9 +363,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         recvstr.erase(0, pos + strlen("\n"));
     }
 
-    //print to the access log here 
-    writeToLog(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
-
     // forward the header to the client
     if (write(conn_sock, recvbuf, r) < 0) {
         fprintf(stderr, "There was an error when writing to the client socket. Terminating thread.\n");
@@ -380,11 +377,12 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     }
     
     // if header_only is disabled, call read, and start sending data to the client 
+
+    int bytes_read = r;
     if (!header_only) {
 
         //reset the recv buffer
         memset(recvbuf, 0, MAXSIZE);
-        int bytes_read = 0;
         bool reset_flag = false; 
 
         while (true) {
@@ -400,6 +398,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             fb_lock.unlock();   
 
             if (reset_flag) {
+                http_status = 403; //write to log that domain is forbidden
                 break;
             }
 
@@ -414,7 +413,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
                 // if the connection is terminated by the server 
                 if (errno == EWOULDBLOCK) {
                     fprintf(stderr, "SSL_read() timed out. Server may have lost connection to the server. Closing thread.\n");
-                    sendHTTPResponse(conn_sock, "503");
+                    sendHTTPResponse(conn_sock, "503"); // may have to remove since 200 has already been sent
                     writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
                     break;
                 }
@@ -447,6 +446,8 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             
         }
     }
+    //print to the access log here 
+    writeToLog(access_log_fp, cli_addr_str, parsed_req[0], http_status, bytes_read);
 
     // ssl cleanip here before return, close sockets
     SSL_shutdown(ssl);

@@ -1,5 +1,5 @@
 #pragma once
-#include <thread> 
+#include <thread>
 #include <mutex>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -20,3 +20,5 @@ using namespace std;
 
 void signalHandler(int signum);
 void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str);
+void sendHTTPResponse(int sockfd, string status_code);
+void writeToLog(string fp, string cli_ip, string f_line, int status_code, int size);

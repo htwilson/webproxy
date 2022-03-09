@@ -3,7 +3,7 @@
 
 mutex glock;
 vector<string> fb_domains; 
-string fb_filepath;
+string fb_filepath; //locked correctly
 
 //COMMANDS & NOTES
 // wget www.example.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039
@@ -83,7 +83,21 @@ void signalHandler(int signum) {
     glock.lock();
     fb_domains = getForbiddenDomains(fb_filepath);
     glock.unlock();
-    return;
+}
+
+// lock threads to write to access log 
+void writeToLog(string fp, string cli_ip, string f_line, int status_code, int size){
+    glock.lock();
+    printRFCTimestamp(fp, cli_ip, f_line, status_code, size);
+    glock.unlock();
+}
+
+void sendHTTPResponse(int sockfd, string status_code) {
+    string msg = makeHTTPResponse(status_code);
+    cout << msg << endl;
+    if (write(sockfd, msg.c_str(), msg.size()) < 0) {
+        fprintf(stderr, "There was an error when writing to the client socket. Closing thread.\n");
+    }
 }
 
 void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
@@ -91,9 +105,13 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     char recvbuf[MAXSIZE];
     if (read(conn_sock, recvbuf, MAXSIZE) < 0) {
         fprintf(stderr, "There was an issue calling read on a thread. Closing thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, "HTTP request not recieved by server", 500, 0);
         close(conn_sock);
         return; 
     }
+
+    cout << recvbuf << endl;
 
     //parse the request here. convert rcvbuf into a string 
     vector<string> parsed_req; 
@@ -101,7 +119,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     int pos = 0;
     while ( (pos = str_req.find("\n")) > -1) {
-        //cout << str_req.substr(0, pos) << endl;
         parsed_req.push_back(str_req.substr(0, pos));
         str_req.erase(0, pos + strlen("\n"));
     }
@@ -110,6 +127,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     bool header_only = NULL; 
     string domain;
     string port;
+
     //check if there is a specifed port, if not, use 443, if 80, use 443 
     //check the type of HTTP request as well
     for (int i = 0; i < (int) parsed_req.size(); i++) {
@@ -132,7 +150,10 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             header_only = true;
             req_flag = true;
         } else if ( (index = parsed_req[i].find("Host: ")) > -1 ) {
-            domain = parsed_req[i].substr(6, parsed_req[i].size() - 7); //strip the newline char or else gethostbyname() will not work 
+            domain = parsed_req[i].substr(6, parsed_req[i].size() - 7); //strip the newline char or else gethostbyname() will not work
+            if ( (index = domain.find(":")) > -1 ) {
+                domain = domain.substr(0, index);
+            }  
         }
     }
 
@@ -143,42 +164,35 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     //check the type of request, if not get or head, return 501
     if (!req_flag) {
-        string msg = makeHTTPResponse("501");
-        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 501, 0);
-        cout << msg << endl;
-        if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
-            fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
-        }
+        sendHTTPResponse(conn_sock, "501");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 501, 0);
         close(conn_sock);
         return; 
     }
 
     //check that the requested domain is not in restricted files list, if is is, return 403 
+    glock.lock();
     for (int i = 0; i < (int) fb_domains.size(); i++) {
         if (fb_domains[i].compare(domain) == 0) {
-            string msg = makeHTTPResponse("403");
-            printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
-            cout << msg << endl;
-            if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
-                fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
-            }
+            sendHTTPResponse(conn_sock, "403");
+            writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
             close(conn_sock);
             return; 
         }
     }
+    glock.unlock();
 
     // https://stackoverflow.com/questions/32737083/extracting-ip-data-using-gethostbyname
     struct hostent *host_entry = gethostbyname(domain.c_str());
     struct in_addr addr;
 
+    cout << domain << endl;
+    cout << port << endl;
+
     if (!host_entry) {
         // DNS was not able to find an address
-        string msg = makeHTTPResponse("400");
-        printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], 400, 0);
-        cout << msg << endl;
-        if (send(conn_sock, msg.c_str(), msg.size(), 0) < 0) {
-            fprintf(stderr, "There was an error when sending in a thread. Closing thread.\n");
-        }
+        sendHTTPResponse(conn_sock, "400");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 400, 0);
         close(conn_sock);
         return; 
     }
@@ -187,19 +201,29 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         bcopy(*host_entry->h_addr_list++, (char *) &addr, sizeof(addr));
     }
 
+    cout << inet_ntoa(addr) << endl;
+
     int ssl_sock;
     // create a new socket to send to the destination 
     if ( (ssl_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		fprintf(stderr, "There was an issue creating a socket on the thread. Closing thread.\n"); 
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         close(conn_sock);
         return;
     } 
 
-    // https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
-    if ( fcntl(conn_sock, F_SETFL, fcntl(conn_sock, F_GETFL, 0) | O_NONBLOCK) < 0){
-        fprintf(stderr, "There was an issue making a socket non blocking. Closing thread.\n"); 
+    //create a socket timeout here
+    struct timeval timeout;      
+    timeout.tv_sec = 10;
+    timeout.tv_usec = 0;
+    
+    if (setsockopt(ssl_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0) {
+        fprintf(stderr, "Setting SO_RCVTIMEO failed. Closing thread\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         close(conn_sock);
-        return;
+        close(ssl_sock);
     }
 
     // create the dst address struct    
@@ -211,6 +235,8 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     // validate ip address
     if (inet_pton(AF_INET, inet_ntoa(addr), &dst_addr.sin_addr) <= 0) {
         fprintf(stderr, "Invalid IP address %s. \n", inet_ntoa(addr));
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         close(ssl_sock);
         close(conn_sock);
         return;
@@ -218,7 +244,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     //connect to the dst
     if (connect(ssl_sock, (struct sockaddr *) &dst_addr, sizeof(dst_addr)) < 0) {
-        fprintf(stderr, "Connection error. Incorrect port or IP address? \n");
+        fprintf(stderr, "TCP handshake failed. Server may be offline. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "503");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 503, 0);
         close(ssl_sock);
         close(conn_sock);
         return;
@@ -235,7 +263,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     //create CTX
     SSL_CTX *ctx = SSL_CTX_new( SSLv23_client_method()); 
     if (!ctx) {
-        fprintf(stderr, "Error creating SSL. Terminating thread.\n");
+        fprintf(stderr, "Error creating SSL context. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         close(ssl_sock);
         close(conn_sock);
         return;
@@ -244,7 +274,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     //create SSL structure
     SSL *ssl = SSL_new (ctx);
     if (!ssl) {
-        fprintf(stderr, "Error creating SSL. Terminating thread.\n");
+        fprintf(stderr, "Error creating SSL structure. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_CTX_free(ctx);
         close(ssl_sock);
         close(conn_sock);
@@ -253,7 +285,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     // connect the SSL object to the socket
     if (SSL_set_fd (ssl, ssl_sock) < 0) {
-        fprintf(stderr, "Error connecting SSL to the socket. Terminating thread.\n");
+        fprintf(stderr, "Error connecing the SSL object to the socket. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
@@ -267,7 +301,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
     //connect using ssl
     if (SSL_connect(ssl) <= 0) {
-        fprintf(stderr, "Error connecting using SSL. Terminating thread.\n");
+        fprintf(stderr, "SSL handshake failed. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
@@ -279,6 +315,8 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     //write to destination
     if (SSL_write(ssl, recvbuf, MAXSIZE) <= 0) {
         fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
@@ -294,7 +332,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     // read header from destination 
     int r; 
     if ( (r = SSL_read(ssl, recvbuf, MAXSIZE)) <= 0) {
-        fprintf(stderr, "Error writing over SSL socket. Terminating thread.\n");
+        fprintf(stderr, "Error reading over SSL socket. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
@@ -303,7 +343,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         return;
     }
 
-    cout << recvbuf << endl;
+    //cout << recvbuf << endl;
     int http_status;
     string content_size;
     string recvstr(recvbuf);
@@ -322,14 +362,14 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         recvstr.erase(0, pos + strlen("\n"));
     }
 
-    // cout << "Bytes read: " << r << endl;
-    // cout << content_size << endl;
     //print to the access log here 
-    printRFCTimestamp(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
+    writeToLog(access_log_fp, cli_addr_str, parsed_req[0], http_status, atoi(content_size.c_str()));
 
     // forward the header to the client
-    if (send(conn_sock, recvbuf, r, 0) < 0) {
-        fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
+    if (write(conn_sock, recvbuf, r) < 0) {
+        fprintf(stderr, "There was an error when writing to the client socket. Terminating thread.\n");
+        sendHTTPResponse(conn_sock, "500");
+        writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
@@ -340,71 +380,70 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     
     // if header_only is disabled, call read, and start sending data to the client 
     if (!header_only) {
+
         //reset the recv buffer
         memset(recvbuf, 0, MAXSIZE);
         int bytes_read = 0;
         bool reset_flag = false; 
-        while (true) {
 
-            // if the content length exists, you can read until you get the amount 
-            if (bytes_read >= atoi(content_size.c_str()) && atoi(content_size.c_str()) != 0) {
-                break;
-            }
+        while (true) {
 
             // if the file is reloaded and the domain is now restricted, break from the loop
             // close sockets, client will reconnect, 403 will be sent back
+            glock.lock();
             for (int i = 0; i < (int) fb_domains.size(); i++) {
                 if (fb_domains[i].compare(domain) == 0) {
                     reset_flag = true;
                 }
-            }   
+            }
+            glock.unlock();   
 
             if (reset_flag) {
                 break;
             }
 
             r = SSL_read(ssl, recvbuf, MAXSIZE);
-
             bytes_read += r;
             //cout << "Bytes read: " << bytes_read << " total size: " << content_size << endl;
             //cout << recvbuf << endl;
-
-            int err = SSL_get_error(ssl, r); 
             //cout << r << endl;
             //cout << err << endl; 
-            if (err != 0) {
-                //socket error, break the connection and restart 
+            int err;
+            if ( (err = SSL_get_error(ssl, r)) != 0) {
+                // if the connection is terminated by the server 
+                if (errno == EWOULDBLOCK) {
+                    fprintf(stderr, "SSL_read() timed out. Server may have lost connection to the server. Closing thread.\n");
+                    sendHTTPResponse(conn_sock, "503");
+                    writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
+                    break;
+                }
+                //socket error, break the connection and restart
+                if (err == SSL_ERROR_ZERO_RETURN) {
+                    cout << "ZERO RETURN" << endl;
+                } else if (err == SSL_ERROR_WANT_READ) {
+                    cout << "WANT READ" << endl;
+                } else if (err == SSL_ERROR_WANT_WRITE) {
+                    cout << "WANT WRITE" << endl;
+                } else if (err == SSL_ERROR_SSL) {
+                    cout << "ERROR SSL" << endl;
+                } else if (err == SSL_ERROR_SYSCALL) {
+                    cout << "SYSCALL" << endl;
+                } 
                 break;
             }
-            // if (err == SSL_ERROR_ZERO_RETURN) {
-            //     cout << "ZERO RETURN" << endl;
-            //     break;
-            // } else if (err == SSL_ERROR_WANT_READ) {
-            //     cout << "WANT READ" << endl;
-            // } else if (err == SSL_ERROR_WANT_WRITE) {
-            //     cout << "WANT WRITE" << endl;
-            // } else if (err == SSL_ERROR_SSL) {
-            //     cout << "ERROR SSL" << endl;
-            // } else if (err == SSL_ERROR_SYSCALL) {
-            //     break;
-            // }
+            
 
-            if (err == 0) {
-                if (send(conn_sock, recvbuf, r, 0) < 0) {
-                    // if the socket we are writing to has been closed by the client
-                    if (errno == ECONNRESET) {
-                        puts("client termination");
-                        break;
-                    }
-                    fprintf(stderr, "There was an error when sending to client. Terminating thread.\n");
-                    SSL_shutdown(ssl);
-                    SSL_free(ssl);
-                    SSL_CTX_free(ctx);
-                    close(ssl_sock);
-                    close(conn_sock);
-                    return;
+            if (write(conn_sock, recvbuf, r) < 0) {
+                // if the socket we are writing to has been closed by the client
+                if (errno == ECONNRESET) {
+                    break;
                 }
+                fprintf(stderr, "There was an error when writing to the client socket. Terminating thread.\n");
+                sendHTTPResponse(conn_sock, "500");
+                writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
+                return;
             }
+            
         }
     }
 
@@ -419,7 +458,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
 //TO-DO:
 // Signal to reload the file - COMPLETE
-// Chunked encoding - COMPlETE
+// Chunked encoding - COMPlETE*
 // closing threads - COMPLETE
 // multiple clients - COMPLETE
-// specified port numbers
+// specified port numbers - COMPLETE

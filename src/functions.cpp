@@ -67,13 +67,17 @@ vector<string> getForbiddenDomains(string filepath) {
 string makeHTTPResponse(string status_code) {
     string status_line;
 
-    if (status_code.compare("403") == 0) {
-        status_line = "HTTP/1.1 403 Forbidden\r\n";
-    } else if (status_code.compare("400") == 0) {
+    if (status_code.compare("400") == 0) {
         status_line = "HTTP/1.1 400 Bad Request\r\n";
+    } else if (status_code.compare("403") == 0) {
+        status_line = "HTTP/1.1 403 Forbidden\r\n";
+    } else if (status_code.compare("500") == 0){
+        status_line = "HTTP/1.1 500 Internal Server Error\r\n";
     } else if (status_code.compare("501") == 0){
         status_line = "HTTP/1.1 501 Not Implemented\r\n";
-    }
+    } else if (status_code.compare("503") == 0){
+        status_line = "HTTP/1.1 503 Service Unavailable\r\n";
+    } 
     
     string http_res = status_line + "Connection: close\r\n\r\n"; 
     return http_res;

@@ -112,8 +112,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         return; 
     }
 
-    cout << recvbuf << endl;
-
     //parse the request here. convert rcvbuf into a string 
     vector<string> parsed_req; 
     string str_req(recvbuf);
@@ -175,6 +173,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     fb_lock.lock();
     for (int i = 0; i < (int) fb_domains.size(); i++) {
         if (fb_domains[i].compare(domain) == 0) {
+            fb_lock.unlock();
             sendHTTPResponse(conn_sock, "403");
             writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
             close(conn_sock);
@@ -392,7 +391,9 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
             fb_lock.lock();
             for (int i = 0; i < (int) fb_domains.size(); i++) {
                 if (fb_domains[i].compare(domain) == 0) {
+                    fb_lock.unlock();
                     reset_flag = true;
+                    break;
                 }
             }
             fb_lock.unlock();   
@@ -413,11 +414,12 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
                 // if the connection is terminated by the server 
                 if (errno == EWOULDBLOCK) {
                     fprintf(stderr, "SSL_read() timed out. Server may have lost connection to the server. Closing thread.\n");
-                    sendHTTPResponse(conn_sock, "503"); // may have to remove since 200 has already been sent
-                    writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 500, 0);
+                    // sendHTTPResponse(conn_sock, "503"); // may have to remove since 200 has already been sent
+                    http_status = 503;
                     break;
                 }
                 //socket error, break the connection and restart
+                perror("ERROR");
                 if (err == SSL_ERROR_ZERO_RETURN) {
                     cout << "ZERO RETURN" << endl;
                 } else if (err == SSL_ERROR_WANT_READ) {
@@ -458,7 +460,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     return; 
 }
 
-//TO-DO:
+// TO-DO:
 // Signal to reload the file - COMPLETE
 // Chunked encoding - COMPlETE*
 // closing threads - COMPLETE
@@ -467,3 +469,4 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
 // QUESTION:
 // Chunked encoding does not work, gets SYSCALL error and kills thread, wgets only works because it retries, curl does not
+// if https is not specified the command will not go to the proxy for wget

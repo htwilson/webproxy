@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <fcntl.h>
 
-#define MAXSIZE 32768
+#define MAXSIZE 1500
 #define MAXREQ 50
 
 using namespace std;

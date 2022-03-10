@@ -159,6 +159,18 @@ curl -o output.file -v -x http://127.0.0.1:2039/ www.cnn.com
 curl -o output.file -v -x http://127.0.0.1:2039/ www.pudim.com.br
 wget http://textfiles.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039 --server-response --spider
 
+
+Aborting Connections from client and server/ Setting domain to forbidden in the middle of transfer
+wget http://mirror.ufs.ac.za/linuxmint/stable/14/linuxmint-14-kde-dvd-64bit.iso -e use_proxy=yes -e http_proxy=128.114.104.54:2039
+
+4 clients 3 different terminals
+curl -o output.file -v -x http://128.114.104.54:2039/ www.cnn.com
+wget http://media.discordapp.net:443/attachments/935295040203415612/951324595187748894/unknown.png -e use_proxy=yes -e http_proxy=128.114.104.54:2039
+curl -o example.file -v -x http://128.114.104.54:2039/ www.example.com & curl -o pudim.file -v -x http://128.114.104.54:2039/ www.pudim.com.br
+
+Concurrent Connections
+curl -o example.file -v -x http://128.114.104.54:2039/ www.example.com & curl -o pudim.file -v -x http://128.114.104.54:2039/ www.pudim.com.br
+
 NOTES
 There were a few issues I found when developing this proxy. The most time consuming
 issue I found was trying to make the proxy handle chunked encoding. I messed with 

@@ -419,14 +419,3 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     close(conn_sock);
     return; 
 }
-
-// TO-DO:
-// Signal to reload the file - COMPLETE
-// Chunked encoding - COMPlETE*
-// closing threads - COMPLETE
-// multiple clients - COMPLETE
-// specified port numbers - COMPLETE
-
-// QUESTION:
-// Chunked encoding does not work, gets SYSCALL error and kills thread, wgets only works because it retries, curl does not
-// if https is not specified the command will not go to the proxy for wget

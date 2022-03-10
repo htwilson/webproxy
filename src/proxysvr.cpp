@@ -9,7 +9,9 @@ string fb_filepath;
 //COMMANDS & NOTES
 // wget www.example.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039
 // curl -x http://127.0.0.1:2039/ http://www.example.com
+// curl -o output.file -v -x http://127.0.0.1:2039/ www.stackoverflow.com
 // ctrl-z to stop server, kill -9 $(jobs -p) to kill process
+
 //./myproxy listen_port forbidden_sites_file_path access_log_file_path
 int main (int argc, char *argv[]) {
 
@@ -169,19 +171,6 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         return; 
     }
 
-    //check that the requested domain is not in restricted files list, if is is, return 403 
-    fb_lock.lock();
-    for (int i = 0; i < (int) fb_domains.size(); i++) {
-        if (fb_domains[i].compare(domain) == 0) {
-            fb_lock.unlock();
-            sendHTTPResponse(conn_sock, "403");
-            writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
-            close(conn_sock);
-            return; 
-        }
-    }
-    fb_lock.unlock();
-
     // https://stackoverflow.com/questions/32737083/extracting-ip-data-using-gethostbyname
     struct hostent *host_entry = gethostbyname(domain.c_str());
     struct in_addr addr;
@@ -202,6 +191,19 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     }
 
     // cout << inet_ntoa(addr) << endl;
+
+    //check that the requested domain or given IP is not in restricted files list, if is is, return 403 
+    fb_lock.lock();
+    for (int i = 0; i < (int) fb_domains.size(); i++) {
+        if (fb_domains[i].compare(domain) == 0 || fb_domains[i].compare(inet_ntoa(addr)) == 0) {
+            fb_lock.unlock();
+            sendHTTPResponse(conn_sock, "403");
+            writeToLog(access_log_fp, cli_addr_str, parsed_req[0], 403, 0);
+            close(conn_sock);
+            return; 
+        }
+    }
+    fb_lock.unlock();
 
     int ssl_sock;
     // create a new socket to send to the destination 
@@ -255,7 +257,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     // initialize SSL
     SSL_library_init();
     SSL_load_error_strings();
-    //OpenSSL_add_all_algorithms();
+    OpenSSL_add_all_algorithms();
 
     // https://stackoverflow.com/questions/7698488/turn-a-simple-socket-into-an-ssl-socket
     // https://stackoverflow.com/questions/41229601/openssl-in-c-socket-connection-https-client
@@ -297,7 +299,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
     }
 
     //verify the SSL connection 
-    //SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
     //connect using ssl
     if (SSL_connect(ssl) <= 0) {
@@ -344,7 +346,7 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
         return;
     }
 
-    cout << recvbuf << endl;
+    // cout << "\n\nOUT LOOP:\n\n" << recvbuf << endl;
     int http_status;
     string content_size;
     string recvstr(recvbuf);
@@ -409,14 +411,16 @@ void threadFunc(int conn_sock, string access_log_fp, string cli_addr_str) {
 
             // cout << "read done" << endl;
             // cout << r << endl;
-            cout << recvbuf << endl;
+            // cout << "\n\nIN LOOP:\n\n" << recvbuf << endl;
             // cout << err << endl;
 
-            // // if the connection is lost to the server
-            if (errno == EWOULDBLOCK) {
-                fprintf(stderr, "SSL_read() timed out. Server may have lost connection to the server. Closing thread.\n");
-                http_status = 503;
-                break;
+            // if the connection is lost to the server
+            if (r < 0) {
+                if (errno == EWOULDBLOCK) {
+                    fprintf(stderr, "SSL_read() timed out. Server may have lost connection to the server. Closing thread.\n");
+                    http_status = 503;
+                    break;
+                }
             }
             
             //check if there is an error in the openssl socket call

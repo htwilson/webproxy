@@ -103,7 +103,7 @@ void printRFCTimestamp(string fp, string cli_ip, string f_line, int status_code,
     //open the access log file
     FILE *log_file = fopen(fp.c_str(), "a");
     if(log_file == NULL){
-        fprintf(stderr, "There was an error when creating the file. \n");
+        fprintf(stderr, "There was an error when writing to the log. \n");
         exit(EXIT_FAILURE);
     }
 

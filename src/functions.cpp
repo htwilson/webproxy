@@ -29,6 +29,7 @@ void checkPort(string str) {
     }
 }
 
+//validates the path that is input for correctness
 void checkPath(string str) {
     if ((int)str.find("//") != -1) {
         fprintf(stderr, "Invalid root_file_path specified. No // allowed.\n");
@@ -45,6 +46,7 @@ void checkPath(string str) {
     }
 }
 
+//returns a vector containing a list of forbidden domains 
 vector<string> getForbiddenDomains(string filepath) {
     vector<string> fb_domains;
     string line;
@@ -64,6 +66,7 @@ vector<string> getForbiddenDomains(string filepath) {
     return fb_domains;
 }
 
+//creates an http response for the proxy
 string makeHTTPResponse(string status_code) {
     string status_line;
 
@@ -99,6 +102,32 @@ void printRFCTimestamp(string fp, string cli_ip, string f_line, int status_code,
     strftime(buffer, 26, "%Y-%m-%dT%H:%M:%S", tm_ptr);
     //convert ms to string and truncate
     sprintf(str_ms, "%ld", tv.tv_usec);
+
+    //make the directory if it does not exist yet
+    string filepath;
+    string dir;
+    int pos = 0;
+
+    if ( (pos = fp.rfind("/")) > - 1) {
+        filepath = fp.substr(0, fp.rfind("/"));
+    } 
+    pos = 0;
+    while (pos != -1) {
+        pos = filepath.find("/");
+        if (pos != -1) {
+            dir += filepath.substr(0, pos);
+        }else {
+            dir += filepath;
+        }
+        if (mkdir(dir.c_str(), 0777) == -1) {
+            if (errno != EEXIST) {
+                fprintf(stderr, "Error creating directory: %s\n", dir.c_str());
+                exit(-1);
+            }
+        }
+        dir += "/";
+        filepath.erase(0, pos + 1);
+    }
 
     //open the access log file
     FILE *log_file = fopen(fp.c_str(), "a");

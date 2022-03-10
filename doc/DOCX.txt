@@ -1,4 +1,177 @@
-Proxy server acts a gateway between the client and the server 
-send the request to the proxy server and forward that request
-VPNs function as proxy services
-Proxy takes requests and forwards it on, request looks like it comes from the server
+###############################################################################
+# Hugo Wilson
+# huwilson@ucsc.edu
+# ID #1599321
+# 2/21/2022
+###############################################################################
+
+				            FINAL PROJECT DOCUMENTATION
+
+INTRODUCTION
+For this assignment, the goal is to make a proxy server that will accept http
+requests from clients and convert them into https requests to the specified web
+server. Any responses from the web server will be recieved in https and sent
+back to the client. The server will also have a blacklist that will prevent 
+clients from connecting to domains specified on it. To add, the server has the 
+capability of reloading the file without having to restart.
+
+OVERVIEW
+To start the proxy server, 3 arguments must be specified:
+
+./myproxy listen_port forbidden_sites_file_path access_log_file_path
+
+listen_port defines the port number that the server will be listening on for 
+incoming connections. forbidden_sites_file_path is the path to the file that
+contains a list of blacklisted domains and IP addresses. This file must already
+exist. access_log_file_path is a path to a file in which the proxy will print
+out information regarding the connections it recieves from the client. This
+file is not required to exist. 
+
+The program starts by setting 4 global variables. Two of them are mutexes that
+will be used when the program has to reload the forbidden sites file and
+when the program has to write to the access log. The other two global variables
+are a string containing forbidden_sites_file_path and a vector that contains
+a list of all the forbidden sites. 
+
+Next, the program will take the command line arguments and error check them by 
+using helper functions defined in function.cpp. Once these checks are passed
+the program will set the global variable that contains forbidden_sites_file_path
+and then create two sockets; One will be used to listen for incoming TCP 
+connections, and the other will be used to connect the client to the proxy. 
+
+From here, bind() is called to set the listening socket to the specified IP 
+address, and listen() is called to enable the proxy to start listening for TCP
+connections. 
+
+Two signal handlers are initialized next, one for SIGINT and one for SIGPIPE. 
+If SIGINT is recieved by the proxy, the program will call signalHandler(), a 
+function that will lock fb_lock and call getForbiddenDomains() in order
+to update the global vector that contains blacklisted domains. The function 
+will then unlock it once the update is complete. If SIGPIPE is recieved by
+the proxy, the program will simply ignore the signal, as it is not an critical
+error for the proxy. 
+
+Next, the global vector that contains blacklisted domains, fb_domains, is 
+initalized with getForbiddenDomains(). Then a infinte loop is called that will
+call accept() on the listening socket and wait for an incoming connection. 
+When it recieves a connection, it will initalize conn_sock for the client. 
+The client address is taken from the socket, and then a thread is created and
+detached to handle the client and it's request. 
+
+The newly detached thread will call thread_func() and run it to completion. 
+Within the function, the thread will first call read() and recieve the 
+http request from the client. It will then parse the header for the requested
+domain, port number, and type of request. If no port is specified, or if the
+port was set to 80, then the thread will set the port to 443. The thread
+will then check that the type of request was valid. If req_flag is low, then
+that means the client sent an invalid request, and the thread will send a 501
+error, log the request with writeToLog(), and return, thus closing the thread.
+
+If the thread does not terminate, it will then conduct a DNS lookup of the 
+domain and find the associated IP address. If the IP address is not found
+with gethostbyname(), the thread will send a 400 error to the client, write
+to the log and and terminate. Else, the program will retrieve the IP address. 
+
+Next the program verifies that the retrieved IP address and domain name are 
+not contained in fb_domains. The program will lock fb_lock and then iterate
+through the vector checking if there is a match. IF there is a match, 
+the program will send a 403 error to the client, write to the log, and
+terminate. If not, then the program will continue. 
+
+A new socket is created on the thread to handle the ssl connection to the web
+server. A timeout mechanism is placed on it to allow the proxy to detect if
+the server it connected to has lost connection. This is set to 10 seconds. 
+Then the socket is filled with the specifed port number and the retrieved
+IP address. The IP address is validated with inet_pton() and if an error is 
+raised, then the thread will send back a 500 error, write to the log, and 
+terminate. 
+
+Next, connect() is called to establish the TCP handshake with the webserver. 
+Once complete, the thread will then establish the SSL connection. First the
+library is initalized, then an SSL context is created. Next, an SSL structure
+is initialized, and the ssl socket is bound to the structure with SSL_set_fd().
+SSL_CTX_set_verify() is called to verify the context, and then SSL_connect()
+is called to trigger the SSL handshake with the server. Once this is done, 
+SSL_write() is called to forward the HTTP request received by the client to the
+webserver. In all the functions mentioned above except for SSL_CTX_set_verify(),
+if there is an error returned by any of them, the proxy will send a 500 code 
+to the client, cleanup sockets and SSL structures, then terminate the thread. 
+
+Once the client's request is sent to the server, the proxy will then enter an 
+infinite loop that contains SSL_read() and write(). Within this loop, the thread
+will forward all data recieved over the SSL connection from the web server to 
+the client. The first thing the thread does is clear the buffer. It will then 
+lock the thread so it can access fb_domains and check that the webserver the
+proxy connected to is not blacklisted. Since fb_domains can be updated at any
+time, this check needs to be here. If a domain is added to fb_domains and it
+is its webserver is the one we are currently communicating with, the program
+will set the http status to 403, break from the loop and log the request with 
+a 403 error. The client will initiate a reconnect, and a new thread is created
+but the proxy will reject the client request and send a 403 http response back. 
+
+The thread will then call SSL_read() and SSL_get_error(). First, SSL_read() is 
+checked for EWOULDBLOCK. If this is true, then this means that the server 
+disconnected and the socket timed out. The thread will set the http status
+to 503, break from the loop, write to the log, clean up and then terminate. 
+Then, SSL_get_error() is checked for SSL_ERROR_ZERO_RETURN and
+SSL_ERROR_SYSCALL. If either of these are high, then it indicates that the thread
+has read all available data from the SSL socket, and will then break. If any
+other SSL error code is received, then the program will recognize it as an error,
+set the http status to 500 and then break. 
+
+The next thing the thread will do in the loop is process the header. It first
+checks that it has found the header, then it parses it to thet the HTTP response
+first line. It will then set parsed_header to high so the thread knows it has 
+processed the header, and it can discard any other headers* it recieves. In 
+the scenario, that the program recieves another header, it will break from the 
+loop and discard the data. 
+
+Once that is done, the thread will call write() in the loop to forward the 
+recieved data to the client. If the call returns EPIPE or ECONNRESET, then it
+is assumed that the client disconnected. The http status code is set to 400, 
+and the thread breaks from the loop. If the call returns an error other than 
+those, then the thread will print an error code, set the http status to 500, 
+and then break. 
+
+In all cases when the thread breaks from the loop, the thread will write to 
+the log with the obtained status code, and then conduct cleanup by freeing
+ssl structure and closing socket. Since the thread is detached, it will 
+terminate itself by returning to main. 
+
+TESTING
+
+Testing was conducted using a variety of different domains. Various tests that
+I conducted included interrupting a transmission by terminating the client, 
+interrupting a transmission by disconnecting wifi, and reloading the forbidden 
+domains file with a domain that a thread was currently communicating with. In 
+each, case the error checks that I had set for these scenarios worked. I also 
+tested working with non HTML files such as .png, and tested how my code would
+handle chunked encoded websites. I played with specifing port numbers, changing
+domains from http to https, and even attempted to connect to servers without
+https capabilities. The program was also tested to see if it could handle multiple
+clients. In each, case, the proxy performed well. Examples of some commands I used
+are down below. 
+
+wget http://mirror.ufs.ac.za/linuxmint/stable/14/linuxmint-14-kde-dvd-64bit.iso -e use_proxy=yes -e http_proxy=127.0.0.1:2039
+wget http://media.discordapp.net:443/attachments/935295040203415612/951324595187748894/unknown.png -e use_proxy=yes -e http_proxy=127.0.0.1:2039
+curl -o output.file -v -x http://127.0.0.1:2039/ http://www.stackoverflow.com
+curl -o output.file -v -x http://127.0.0.1:2039/ www.cnn.com
+curl -o output.file -v -x http://127.0.0.1:2039/ www.pudim.com.br
+wget http://textfiles.com -e use_proxy=yes -e http_proxy=127.0.0.1:2039 --server-response --spider
+
+NOTES
+There were a few issues I found when developing this proxy. The most time consuming
+issue I found was trying to make the proxy handle chunked encoding. I messed with 
+using a timeout mechanism, as well as checking for ssl error denoting that there
+was no more data to be read, but still was having issues with the client getting
+the file. It seemed like the client was getting bit errors and needed to retransmit.
+After a lot of debugging, changing my buffer size from 32768 to 1500 seemed to do the
+trick, as well as changing the way I reset the buffer. 
+
+*Another issue I encountered was that I would recieve multiple HTTP responses for a 
+single request. Although the client would ignore the additional data, it was messing 
+with the object_size_in_bytes segment of my log. To fix this, I coded the proxy in a 
+way where if it recieved another header, it would terminate the reading loop and 
+end the thread. The only issue I see with this is that there could be scenarios 
+misidentify body content as a header, and terminate the thread prematurely. 
+However, I have not encountered this issue during testing.  

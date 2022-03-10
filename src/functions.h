@@ -9,6 +9,8 @@
 #include <fstream>
 #include <vector>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 using namespace std;
 
